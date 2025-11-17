@@ -1,0 +1,106 @@
+import boto3
+import socket
+import logging
+from botocore.config import Config
+from datetime import datetime, timezone, timedelta
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# AWS S3 credentials and bucket details
+ACCESS_KEY = 'xxxxx'
+SECRET_KEY = 'xxxxx'
+BUCKET_NAME = 'xxxxx'
+PREFIX = 'xxxxx/'  # Folder within the bucket
+REGION = 'eu-west-1'
+TIMEOUT = 60  # Timeout in seconds
+
+# QRadar syslog details
+QRADAR_ADDRESS = 'xxxxx'
+QRADAR_PORT = xxxxx
+MAX_UDP_PACKET_SIZE = 65507  # Maximum size for a UDP packet
+
+# Create an S3 client with timeout
+s3_client = boto3.client('s3',
+                         aws_access_key_id=ACCESS_KEY,
+                         aws_secret_access_key=SECRET_KEY,
+                         region_name=REGION,
+                         config=Config(read_timeout=TIMEOUT, connect_timeout=TIMEOUT))
+
+
+def get_recent_log_files(bucket_name, prefix, minutes):
+    """Retrieve log files modified in the last 'minutes' minutes from the specified S3 bucket and prefix."""
+    logging.info(f"Fetching list of objects from bucket: {bucket_name} with prefix: {prefix}")
+    response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+    all_objects = response.get('Contents', [])
+
+    # Calculate the cutoff time
+    cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+
+    # Filter objects based on LastModified time
+    recent_objects = [obj for obj in all_objects if obj['LastModified'] >= cutoff_time]
+    logging.info(f"Found {len(recent_objects)} log files modified in the last {minutes} minutes.")
+
+    # Sort objects by LastModified and return
+    sorted_objects = sorted(recent_objects, key=lambda x: x['LastModified'])
+    return sorted_objects
+
+
+def download_log(s3_object):
+    """Download a log file from S3."""
+    logging.info(f"Downloading log file: {s3_object['Key']}")
+    obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=s3_object['Key'])
+    return obj['Body'].read()
+
+
+def forward_to_qradar(log_data):
+    """Send log data to QRadar via syslog, splitting if necessary."""
+    logging.info("Forwarding log data to QRadar")
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        if len(log_data) > MAX_UDP_PACKET_SIZE:
+            for i in range(0, len(log_data), MAX_UDP_PACKET_SIZE):
+                sock.sendto(log_data[i:i + MAX_UDP_PACKET_SIZE], (QRADAR_ADDRESS, QRADAR_PORT))
+        else:
+            sock.sendto(log_data, (QRADAR_ADDRESS, QRADAR_PORT))
+
+
+def main():
+    try:
+        # Get recent log files from S3 (last 30 minutes)
+        recent_logs = get_recent_log_files(BUCKET_NAME, PREFIX, 30)
+
+        if recent_logs:
+            for s3_object in recent_logs:
+                # Download the log file as binary data
+                log_data = download_log(s3_object)
+
+                # Decode log data
+                log_content = log_data.decode(errors='ignore')
+
+                # Split the log content by lines and filter out unwanted lines
+                log_lines = log_content.splitlines()
+                logging.info(f"Total log lines: {len(log_lines)}")
+
+                # Filter CEF events
+                filtered_events = [line for line in log_lines if line.startswith('CEF:0')]
+                logging.info(f"Total filtered CEF events: {len(filtered_events)}")
+
+                # Forward each log event to QRadar
+                for event in filtered_events:
+                    forward_to_qradar(event.encode('utf-8', errors='ignore'))
+
+                # Print the last log content and the count of logs sent
+                if filtered_events:
+                    logging.info(f"Last log content:\n{filtered_events[-1]}")
+                logging.info(f"Total logs sent to QRadar: {len(filtered_events)}")
+
+        else:
+            logging.info("No recent log files to process.")
+
+    except Exception as e:
+        logging.error(f"An error occurred: {e}")
+
+
+if __name__ == '__main__':
+    main()
+

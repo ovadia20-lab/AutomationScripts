@@ -1,0 +1,113 @@
+import boto3
+import json
+import gzip
+import io
+import socket
+
+# AWS credentials
+aws_access_key_id = 'xxxx'
+aws_secret_access_key = 'xxxx'
+
+# S3 bucket details
+bucket_name = 'xxxx'
+region = 'eu-west-1'
+
+# QRadar details
+qradar_ip = 'xxxx'
+qradar_port = xxx
+
+# Initialize S3 client
+s3 = boto3.client('s3', aws_access_key_id=aws_access_key_id, aws_secret_access_key=aws_secret_access_key, region_name=region)
+
+# Initialize socket connection to QRadar
+qradar_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+# Function to send events to QRadar in LEEF format
+def send_to_qradar_leef(event):
+    try:
+        qradar_socket.sendto(event.encode(), (qradar_ip, qradar_port))
+    except Exception as e:
+        print(f"Error sending to QRadar: {e}")
+
+# Function to process S3 object
+def process_object(obj):
+    key = obj['Key']
+    print(f"Processing file: {key}")
+    try:
+        # Download the object
+        response = s3.get_object(Bucket=bucket_name, Key=key)
+        # Read the content
+        content = response['Body'].read()
+        # Decompress if the content is gzip compressed
+        if key.endswith('.gz'):
+            content = gzip.GzipFile(fileobj=io.BytesIO(content)).read().decode()
+        else:
+            content = content.decode()
+        # Parse JSON
+        events = json.loads(content)
+        # Convert events to LEEF format and send them to QRadar
+        for event in events:
+            leef_event = convert_to_leef(event)
+            print(f"Forwarding event: {leef_event}")
+            send_to_qradar_leef(leef_event)
+    except Exception as e:
+        print(f"Error processing object {key}: {e}")
+
+# Function to convert event to LEEF format
+def convert_to_leef(event):
+    # Assuming 'createdTime', 'actionType', 'IP', 'machineName', and 'Email' fields exist in the event
+    created_time = event.get('createdTime', '')
+    action_type = event.get('actionType', '')
+    ip = event.get('IP', '')
+    machine_name = event.get('machineName', '')
+    email = event.get('data', [{}])[0].get('Email', '')  # Extracting email from data field
+    return f"LEEF:2.0|app_log|Event|1.0|{created_time}^|actionType={action_type} IP={ip} machineName={machine_name} Email={email}"
+
+# Function to list folders in S3 bucket
+def list_folders():
+    try:
+        print("Listing folders in the bucket...")
+        response = s3.list_objects_v2(Bucket=bucket_name, Delimiter='/')
+        folders = response.get('CommonPrefixes', [])
+        if folders:
+            # Get the latest folder based on its name (which should be the date)
+            latest_folder = max(folders, key=lambda x: x['Prefix'])
+            latest_folder_name = latest_folder['Prefix'].rstrip('/')
+            print(f"Latest folder: {latest_folder_name}")
+            # List objects in the latest folder
+            list_objects_in_folder(latest_folder_name)
+        else:
+            print("No folders found in the bucket.")
+    except Exception as e:
+        print(f"Error listing folders: {e}")
+
+# Function to list objects in a specific folder
+def list_objects_in_folder(folder_name):
+    try:
+        print(f"Listing objects in folder: {folder_name}")
+        response = s3.list_objects_v2(Bucket=bucket_name, Prefix=folder_name)
+        objects = response.get('Contents', [])
+        if objects:
+            # Filter out only the objects with "app_log" in their name
+            app_log_objects = [obj for obj in objects if 'app_log' in obj['Key']]
+            if app_log_objects:
+                # Get the last 10 app_log objects
+                last_10_app_log_objects = sorted(app_log_objects, key=lambda x: x['LastModified'], reverse=True)[:10]
+                for obj in last_10_app_log_objects:
+                    process_object(obj)
+            else:
+                print("No 'app_log' objects found in the folder.")
+        else:
+            print("No objects found in the folder.")
+    except Exception as e:
+        print(f"Error listing objects in folder {folder_name}: {e}")
+
+# Main function
+def main():
+    print("Starting script...")
+    list_folders()
+    qradar_socket.close()
+    print("Script completed.")
+
+if __name__ == "__main__":
+    main()

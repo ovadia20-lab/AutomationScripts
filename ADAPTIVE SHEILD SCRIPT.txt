@@ -1,0 +1,36 @@
+import requests
+import json
+import socket
+import time
+from datetime import datetime
+
+def get_alerts(api_key):
+    headers = {'Authorization': f'Token {api_key}'}
+    url = 'xxxxx'
+    response = requests.get(url, headers=headers)
+    return response.json()
+
+def send_to_syslog(alerts, syslog_host, syslog_port):
+    for alert in alerts['data']:
+        syslog_message = f"<6>1 {alert['timestamp']} {socket.gethostname()} AdaptiveShield: {alert['description']}"
+        send_syslog(syslog_message, syslog_host, syslog_port)
+        print(f"Event sent to syslog: {syslog_message}")
+        time.sleep(1)  # Sleep for 1 second between events to avoid flooding the syslog server
+
+def send_syslog(message, host, port):
+    syslog_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    syslog_socket.sendto(message.encode('utf-8'), (host, port))
+    syslog_socket.close()
+
+# API Key for Adaptive Shield
+api_key = 'xxxxx'
+
+# Syslog server details
+syslog_host = 'xxxxx'
+syslog_port = xxxxx
+
+# Get alerts from Adaptive Shield
+alerts = get_alerts(api_key)
+
+# Send alerts to syslog server
+send_to_syslog(alerts, syslog_host, syslog_port)

@@ -1,0 +1,109 @@
+import requests
+import json
+import socket
+import time
+from datetime import datetime, timedelta
+
+# === Defender API Authentication ===
+TENANT_ID = "xxxxx"
+CLIENT_ID = "xxxxx"
+CLIENT_SECRET = "xxxxx"
+
+# === QRadar Destination ===
+QRADAR_IP = "xxxxx"
+QRADAR_PORT = xxxxx
+
+# === Microsoft Defender API Endpoints ===
+TOKEN_URL = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
+DEFENDER_API_URL = "https://api.security.microsoft.com/api/incidents"
+
+# === Settings ===
+SINCE_HOURS = 1  # Fetch incidents from the last x hours
+
+def get_access_token():
+    data = {
+        'client_id': CLIENT_ID,
+        'scope': 'https://api.security.microsoft.com/.default',
+        'client_secret': CLIENT_SECRET,
+        'grant_type': 'client_credentials'
+    }
+
+    response = requests.post(TOKEN_URL, data=data)
+    if response.status_code != 200:
+        raise Exception(f"Failed to get token: {response.status_code} - {response.text}")
+
+    return response.json()['access_token']
+
+def get_incidents(token):
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'application/json'
+    }
+
+    since_time = (datetime.utcnow() - timedelta(hours=SINCE_HOURS)).isoformat() + "Z"
+    params = {
+        '$filter': f"lastUpdateTime ge {since_time}"
+    }
+
+    response = requests.get(DEFENDER_API_URL, headers=headers, params=params)
+    if response.status_code != 200:
+        print(f"Error fetching incidents: {response.status_code} - {response.text}")
+        return []
+
+    return response.json().get('value', [])
+
+def extract_relevant_fields(incident):
+    filtered = {
+        "incidentId": incident.get("incidentId"),
+        "incidentUri": incident.get("incidentUri"),
+        "redirectIncidentId": incident.get("redirectIncidentId"),
+        "incidentName": incident.get("incidentName"),
+        "createdTime": incident.get("createdTime"),
+        "lastUpdateTime": incident.get("lastUpdateTime"),
+        "assignedTo": incident.get("assignedTo"),
+        "classification": incident.get("classification"),
+        "determination": incident.get("determination"),
+        "status": incident.get("status"),
+        "severity": incident.get("severity"),
+        "tags": incident.get("tags", []),
+        "alerts": [],
+    }
+
+    for alert in incident.get("alerts", []):
+        filtered_alert = {
+            "alertId": alert.get("alertId"),
+            "title": alert.get("title"),
+            "severity": alert.get("severity"),
+            "status": alert.get("status"),
+            "creationTime": alert.get("creationTime"),
+        }
+        filtered["alerts"].append(filtered_alert)
+
+    return filtered
+
+def send_json_over_tcp(data, ip, port):
+    try:
+        with socket.create_connection((ip, port), timeout=10) as sock:
+            for entry in data:
+                message = json.dumps(entry)
+                sock.sendall((message + "\n").encode('utf-8'))
+                print(f"[>] Sent: {message}")
+                time.sleep(0.1)
+    except Exception as e:
+        print(f"[!] Failed to send data to QRadar: {e}")
+
+def main():
+    print("[*] Getting access token...")
+    token = get_access_token()
+
+    print("[*] Fetching incidents from Defender XDR...")
+    incidents = get_incidents(token)
+    print(f"[*] Found {len(incidents)} incident(s) to send.")
+
+    filtered = [extract_relevant_fields(incident) for incident in incidents]
+
+    if filtered:
+        send_json_over_tcp(filtered, QRADAR_IP, QRADAR_PORT)
+
+if __name__ == "__main__":
+    main()

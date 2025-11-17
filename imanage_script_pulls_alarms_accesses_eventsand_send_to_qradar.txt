@@ -1,0 +1,158 @@
+import requests
+import socket
+import urllib3
+import json
+import os
+
+# -----------------------------
+# CONFIGURATION
+# -----------------------------
+ASMANAGER_URL = "xxxxx"
+USERNAME = "xxxx"
+PASSWORD = "xxxxx"
+
+QRADAR_IP = "xxxxx"
+QRADAR_PORT = xxxxx
+LOG_LIMIT = xxxxx
+STATE_FILE = "xxxxx"
+
+# -----------------------------
+# DISABLE SSL WARNINGS
+# -----------------------------
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# -----------------------------
+# FUNCTIONS
+# -----------------------------
+def get_token():
+    params = {
+        "action": "LOGIN",
+        "username": USERNAME,
+        "password": PASSWORD
+    }
+    r = requests.get(ASMANAGER_URL, params=params, verify=False)
+    r.raise_for_status()
+    return r.json().get("token")
+
+def get_client_guid(token):
+    params = {
+        "token": token,
+        "module": "monitor",
+        "action": "WEBCLIENT_LOGIN",
+        "login": 1
+    }
+    r = requests.get(ASMANAGER_URL, params=params, verify=False)
+    r.raise_for_status()
+    return r.json().get("client_guid")
+
+def get_logs(token, client_guid, a_logid, am_logid, e_logid):
+    params = {
+        "token": token,
+        "client_guid": client_guid,
+        "module": "monitor",
+        "action": "GET_LOGS",
+        "a_logid": a_logid,
+        "am_logid": am_logid,
+        "e_logid": e_logid,
+        "max_log": LOG_LIMIT,
+        "wait_time": 5
+    }
+    r = requests.get(ASMANAGER_URL, params=params, verify=False)
+    r.raise_for_status()
+    return r.json()
+
+def send_to_qradar_tcp(msg):
+    try:
+        with socket.create_connection((QRADAR_IP, QRADAR_PORT), timeout=5) as sock:
+            sock.sendall((msg + "\n").encode("utf-8"))
+    except Exception as e:
+        print(f"[!] Failed to send log to QRadar: {e}")
+
+def decode_hebrew(s):
+    if isinstance(s, str):
+        try:
+            return s.encode('latin1').decode('utf-8')
+        except:
+            return s
+    return s
+
+def format_log(log, log_type):
+    def safe(key):
+        return decode_hebrew(log.get(key, ""))
+
+    base = f"{log_type.upper()} LOG | ID: {log.get('log_id', '')} | Time: {safe('log_time')} | Msg: {safe('log_msg')}"
+
+    if log_type == "access":
+        return (
+            f"{base} | Door: {safe('log_door')} | Direction: {safe('log_direction')} | "
+            f"UserID: {safe('ch_id')} | Name: {safe('ch_name')} | First: {safe('ch_first_name')} "
+            f"Middle: {safe('ch_middle_name')} Last: {safe('ch_last_name')} | "
+            f"EmployeeID: {safe('b_employee_id')} | IDCard: {safe('ch_idcard_no')} | "
+            f"CardNo: {safe('c_no')} | CardCode: {safe('c_code')} | Dept: {safe('b_department')} "
+            f"| Company: {safe('b_company')} | Title: {safe('b_job_title')}"
+        )
+
+    elif log_type == "alarm":
+        return (
+            f"{base} | Door: {safe('log_door')} | ControllerID: {safe('log_controller_id')} | "
+            f"Start: {safe('log_time_start')} | End: {safe('log_time_end')} | "
+            f"UTC_Start: {safe('log_utc_start')} | UTC_End: {safe('log_utc_end')}"
+        )
+
+    elif log_type == "event":
+        return (
+            f"{base} | Door: {safe('log_door')} | ControllerID: {safe('log_controller_id')} | "
+            f"MsgID: {safe('log_msg_id')} | MsgContent: {safe('log_msg_content')}"
+        )
+
+    return base
+
+def load_last_ids():
+    if not os.path.exists(STATE_FILE):
+        return {"a_logid": -1, "am_logid": -1, "e_logid": -1}
+    with open(STATE_FILE, "r") as f:
+        return json.load(f)
+
+def save_last_ids(ids):
+    with open(STATE_FILE, "w") as f:
+        json.dump(ids, f)
+
+# -----------------------------
+# MAIN
+# -----------------------------
+def main():
+    token = get_token()
+    print(f"[+] Got token: {token}")
+    client_guid = get_client_guid(token)
+    print(f"[+] Got client GUID: {client_guid}")
+
+    last_ids = load_last_ids()
+    logs = get_logs(token, client_guid,
+                    a_logid=last_ids["a_logid"],
+                    am_logid=last_ids["am_logid"],
+                    e_logid=last_ids["e_logid"])
+
+    new_ids = last_ids.copy()
+
+    for log in logs.get("access_log", []):
+        msg = format_log(log, "access")
+        print(msg)
+        send_to_qradar_tcp(msg)
+        new_ids["a_logid"] = max(new_ids["a_logid"], log.get("log_id", 0))
+
+    for log in logs.get("alarm_log", []):
+        msg = format_log(log, "alarm")
+        print(msg)
+        send_to_qradar_tcp(msg)
+        new_ids["am_logid"] = max(new_ids["am_logid"], log.get("log_id", 0))
+
+    for log in logs.get("event_log", []):
+        msg = format_log(log, "event")
+        print(msg)
+        send_to_qradar_tcp(msg)
+        new_ids["e_logid"] = max(new_ids["e_logid"], log.get("log_id", 0))
+
+    save_last_ids(new_ids)
+
+if __name__ == "__main__":
+    main()

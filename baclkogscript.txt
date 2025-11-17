@@ -1,0 +1,22 @@
+#!/bin/bash
+
+# Set the path to check the size of
+path="/store/transient/spillover/"
+
+# Get the size of the path in GB
+size=$(du -sb "$path" | awk '{print $1}')
+
+# Calculate the size in GB
+size_in_gb=$(echo "scale=2; $size / 1024 / 1024 / 1024" | bc)
+
+# Check if the size is greater than 2GB
+if (( $(echo "$size_in_gb > 2" | bc -l) )); then
+    # Set email parameters
+    mail_from="xxxxx"
+    mail_to="xxxxx"
+    mail_subject="Path Size Warning"
+    mail_body="The path $path on xxxx Event Processor is larger than 2GB. Current size is $size_in_gb GB."
+
+    # Send email
+    echo "$mail_body" | mailx -s "$mail_subject" -r "$mail_from" "$mail_to"
+fi

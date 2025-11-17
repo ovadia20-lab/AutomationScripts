@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# Configuration
+SENT_EVENTS_FILE="audit_sent.txt"
+QRADAR_IP="xxxxx"
+QRADAR_PORT="xxxxx"
+XDR_API_URL="xxxxx"
+AUTH_ID="xxxxx"
+AUTH_TOKEN="xxxxx"
+
+# Retrieve the last sent event ID
+latest_sent_id=$(tail -n 1 "$SENT_EVENTS_FILE" 2>/dev/null)
+
+# Fetch the latest audit management logs from Cortex XDR
+response=$(curl -s -X POST "$XDR_API_URL" \
+  -H "x-xdr-auth-id:$AUTH_ID" \
+  -H "Authorization: $AUTH_TOKEN" \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request_data": {
+      "search_from": 0,
+      "search_to": 1,
+      "sort": {
+        "field": "timestamp",
+        "keyword": "asc"
+      }
+    }
+  }')
+
+# Extract the latest event ID from the response
+newest_event_id=$(echo "$response" | jq -r '.reply.data[0].AUDIT_ID')
+
+# Check if there is a new event
+if [ "$newest_event_id" != "null" ] && [ "$newest_event_id" != "$latest_sent_id" ]; then
+  # Send the event data to QRadar
+  echo "$response" | nc "$QRADAR_IP" "$QRADAR_PORT"
+
+  # Append the new event ID to the sent events file
+  echo "$newest_event_id" >> "$SENT_EVENTS_FILE"
+
+  # Display the last event details for verification
+  echo "Sent Event ID: $newest_event_id"
+  echo "API Response: $response"
+else
+  echo "No new events to send."
+fi

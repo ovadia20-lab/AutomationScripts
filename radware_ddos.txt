@@ -1,0 +1,106 @@
+import requests
+import json
+import socket
+import os
+from datetime import datetime, timedelta
+
+LAST_TIMESTAMP_FILE = 'last_timestamp.txt'
+
+# Function to send a message to QRadar via syslog
+def send_syslog_message(message, host, port):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.sendto(message.encode(), (host, port))
+    sock.close()
+
+# Function to get the last processed timestamp from the file
+def get_last_timestamp():
+    if os.path.exists(LAST_TIMESTAMP_FILE):
+        with open(LAST_TIMESTAMP_FILE, 'r') as file:
+            return int(file.read().strip())
+    return 0
+
+# Function to update the last processed timestamp in the file
+def update_last_timestamp(timestamp):
+    with open(LAST_TIMESTAMP_FILE, 'w') as file:
+        file.write(str(timestamp))
+
+# Get current timestamp and timestamp from 3 days ago
+current_timestamp = int(datetime.now().timestamp() * 1000)
+three_days_ago_timestamp = int((datetime.now() - timedelta(days=3)).timestamp() * 1000)
+
+# API request to get the events
+url = "xxxxx"
+
+last_timestamp = get_last_timestamp()
+if last_timestamp == 0:
+    last_timestamp = three_days_ago_timestamp
+
+print(f"Fetching events from timestamp: {last_timestamp} to {current_timestamp}")
+
+payload = json.dumps({
+    "criteria": [
+        {
+            "key": "accountId",
+            "value": "xxxxx"
+        },
+        {
+            "key": "startTimestamp",
+            "value": [last_timestamp, None]
+        },
+        {
+            "key": "endTimestamp",
+            "value": [None, current_timestamp]
+        },
+        {
+            "key": "risk",
+            "value": ["Info", "Low", "Medium", "High", "Critical"]
+        }
+    ]
+})
+headers = {
+    'x-api-key': 'xxxxx',
+    'Context': 'xxxxx',
+    'Content-Type': 'application/json'
+}
+
+response = requests.request("POST", url, headers=headers, data=payload)
+
+# Debugging: Print raw response text
+print(f"Raw response: {response.text}")
+
+try:
+    # Parse the response
+    response_data = response.json()
+except json.JSONDecodeError:
+    print("Failed to decode JSON response.")
+    response_data = {}
+
+events = response_data.get('documents', [])
+
+if events:
+    print(f"Number of new events retrieved: {len(events)}")
+    # Sort events by timestamp to process them in order
+    events.sort(key=lambda x: x['endTimestamp'])
+    last_event_timestamp = last_timestamp
+
+    for event in events:
+        # Convert the event to a syslog message format
+        syslog_message = json.dumps(event)
+
+        # Send the syslog message to QRadar
+        qradar_host = "xxxxx"
+        qradar_port = xxxxx
+        send_syslog_message(syslog_message, qradar_host, qradar_port)
+
+        # Print the event that was sent
+        print("Event sent to QRadar:")
+        print(json.dumps(event, indent=4))
+
+        # Update the last event timestamp
+        last_event_timestamp = max(last_event_timestamp, event['endTimestamp'])
+
+    # Update the last processed timestamp file
+    update_last_timestamp(last_event_timestamp)
+    print(f"Updated last processed timestamp to: {last_event_timestamp}")
+else:
+    print("No new events found.")

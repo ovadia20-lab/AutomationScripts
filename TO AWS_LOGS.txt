@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# Set the path to the source folder
+source_folder="xxxxx"
+
+# Set the AWS credentials and region
+export AWS_ACCESS_KEY_ID="xxxxx"
+export AWS_SECRET_ACCESS_KEY="xxxxx"
+export AWS_DEFAULT_REGION="eu-south-1"
+
+# Set the name of your S3 bucket
+s3_bucket="xxxxx"
+
+# Identify the oldest folder in the specified path
+oldest_folder=$(ls -1v "$source_folder" | head -n 1)
+oldest_folder_path="$source_folder$oldest_folder"
+
+# Check if the folder exists
+if [ ! -d "$oldest_folder_path" ]; then
+    echo "No folders found in $source_folder"
+    exit 1
+fi
+
+# Copy the contents of the oldest folder to S3 with Deep Archive storage class
+aws s3 cp "$oldest_folder_path" "s3://$s3_bucket/$source_folder/$oldest_folder" --recursive --storage-class DEEP_ARCHIVE
+
+# Check the exit status of the AWS CLI command
+if [ $? -eq 0 ]; then
+  echo "Folder copied successfully to S3 bucket: $s3_bucket"
+else
+  echo "Error copying folder to S3 bucket"
+fi
