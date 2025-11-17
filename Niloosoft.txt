@@ -1,0 +1,125 @@
+import requests
+from datetime import datetime, timedelta
+import json
+import socket
+
+# Step 1: Pull new logs using requests
+
+# Get the current UTC time as the end time
+end_time = datetime.utcnow()
+
+# Set the start time to 60 minutes ago
+start_time = end_time - timedelta(minutes=60)
+
+# Convert to ISO 8601 format
+start_time_str = start_time.isoformat() + "Z"
+end_time_str = end_time.isoformat() + "Z"
+
+url = "xxxxx"
+headers = {
+    "UserNameToken": "xxxxx",
+    "PasswordToken": "xxxxx",
+    "TransactionCode": "xxxxx",
+    "Content-Type": "application/json"
+}
+
+payload = {
+    "Query": {
+        "OccurrenceTime_Min": start_time_str,
+        "OccurrenceTime_Max": end_time_str
+    },
+    "FromRow": 0,
+    "ToRow": 50,
+    "SortColumn": "OccurrenceTime",
+    "IsAscending": True
+}
+
+response = requests.post(url, headers=headers, json=payload)
+
+# Step 2: Extract logs from the response
+response_data = response.json()
+log_entries = response_data.get('Hits', [])  # 'Hits' contains the log entries
+
+# Define Syslog format
+def format_to_syslog(log):
+    # Try to convert OccurrenceTime to ISO 8601 format (Syslog timestamp)
+    timestamp = log.get('OccurrenceTime', None)
+    if timestamp:
+        try:
+            # Convert timestamp to a readable format
+            timestamp = datetime.strptime(timestamp.split(".")[0], "%Y-%m-%dT%H:%M:%S").strftime("%b %d %H:%M:%S")
+        except ValueError:
+            # Fallback to "unknown_time" if there's any issue with parsing
+            timestamp = "unknown_time"
+    else:
+        timestamp = "unknown_time"
+
+    # Priority value (facility and severity); adjust as needed
+    pri = "<34>"  # Facility: local0 (16) + Severity: info (6)
+
+    # Set hostname to Nilosoft
+    #hostname = "Nilosoft"  # Always Nilosoft
+
+    # Set tag to "YourApp"
+    tag = "YourApp"  # Set fixed tag
+
+    # Construct the message
+    message = f"{pri}{timestamp} {hostname} {tag}: "
+
+    # Add other fields; adjust the mapping based on actual log fields
+    fields = {
+        "header": log.get("Header", "unknown_header"),
+        "description": log.get("Description", "no_description"),
+        "user_id": log.get("UserId", "unknown_user_id"),
+        "function": log.get("FunctionName", "unknown_function"),
+        "transaction_code": log.get("TransactionCode", "unknown_transaction_code"),
+        "creation_time": log.get("CreationTime", "unknown_creation_time")
+    }
+
+    # Construct the key-value pairs for the message
+    kv_pairs = [f"{key}={value}" for key, value in fields.items()]
+    message += " ".join(kv_pairs)
+
+    return message
+
+# Step 3: Forward logs to QRadar via UDP
+qradar_ip = "xxxxx"
+qradar_port = xxxx
+
+# Create a UDP socket
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+# Track the number of logs forwarded
+logs_forwarded = 0
+success = True
+
+for log in log_entries:
+    formatted_log = format_to_syslog(log)
+    try:
+        sock.sendto(formatted_log.encode(), (qradar_ip, qradar_port))
+        logs_forwarded += 1
+    except Exception as e:
+        print(f"Failed to send log: {e}")
+        success = False
+
+# Step 4: Print the forwarding status
+if logs_forwarded > 0:
+    print(f"Successfully forwarded {logs_forwarded} logs to QRadar.")
+else:
+    print("No logs were forwarded to QRadar.")
+
+# Print the status message based on success or failure
+if success and logs_forwarded > 0:
+    print("Status: Success")
+elif logs_forwarded == 0:
+    print("Status: No logs to forward")
+else:
+    print("Status: Failed")
+
+# Close the socket
+sock.close()
+
+# Step 5: Print the last event (if any logs were forwarded)
+if log_entries:
+    print("Last Event:")
+    print(json.dumps(log_entries[-1], indent=4))

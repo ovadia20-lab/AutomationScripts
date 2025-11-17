@@ -1,0 +1,72 @@
+import socket
+import json
+import time
+import requests
+
+def send_tcp_message(endpoint, port, message):
+    # Setup connection
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.connect((endpoint, port))
+
+    # Send message
+    sock.sendall(message.encode('utf-8'))
+
+    # Close connection
+    sock.close()
+
+# Set variables
+token = "xxxxx"
+
+# Get current timestamp in milliseconds
+epoch_millisec_from_time = int(time.time() * 1000)
+time_interval = 2  # in minutes
+epoch_millisec_from_time -= 60000 * time_interval
+
+# Create URL
+url = "xxxxx" + str(epoch_millisec_from_time)
+
+# Set the headers
+headers = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    'X-CloudInsights-ApiKey': token
+}
+
+# Send the request and get the results
+response = requests.get(url, headers=headers)
+alerts = response.json()
+
+# Set syslog variables
+severity = '1'
+facility = '22'
+data_source = 'CloudInsights'
+priority = int(facility) * 8 + int(severity)
+timestamp = time.strftime('%b %d %H:%M:%S')
+
+# Send alerts via UDP
+udp_ip = 'xxxxx'
+udp_port = xxxxx
+counter = 0
+
+for json_alert in alerts['results']:
+    str_alert = json.dumps(json_alert, ensure_ascii=False)
+    full_syslog_message = u"<{}>{} {} | Device Name: CloudInsights | eventID: 1 | eventCategory: AlertCreated | {}".format(priority, timestamp, data_source, str_alert)
+    structured_full_syslog_message = ' '.join(full_syslog_message.split())
+
+    # Send via UDP
+    udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp_socket.sendto(structured_full_syslog_message.encode('utf-8'), (udp_ip, udp_port))
+    udp_socket.close()
+
+    # Send via TCP
+    tcp_ip = 'xxxxx'
+    tcp_port = xxxxx
+    send_tcp_message(tcp_ip, tcp_port, structured_full_syslog_message)
+
+    counter += 1
+
+#Document in logs file
+#log_time = time.strftime('%b %d %H:%M:%S (GMT%z)')
+#result = u"{} Sent {} alerts".format(log_time, counter)
+#with open("C:\\Powershellscript\\logs.txt", "a", encoding='utf-8') as file:
+    #file.write(result + "\n")
